@@ -1,0 +1,113 @@
+#include <ESP8266WiFi.h>
+#include <FirebaseESP8266.h>
+#include <Servo.h>
+#include <SoftwareSerial.h>
+#include <DFRobotDFPlayerMini.h>
+#include <ESP8266HTTPClient.h>
+#include <WiFiClientSecure.h>
+
+const char* ssid = "wifi username";
+const char* password = "wifi password";
+
+const char* firebaseHost = "you database url";
+const char* firebaseAuth = "your authentication token";
+
+FirebaseData firebaseData;
+Servo servoMotor1; // Servo on D1
+Servo servoMotor2; // Servo on D2
+
+const int buzzerPin = D5;  // Buzzer pin
+SoftwareSerial mySerial(D6, D7);  // RX, TX for sending messages
+DFRobotDFPlayerMini myDFPlayer;
+
+const char* telegramBotToken = "6860667945:AAEsuA69vH8wLhhs6_6C9gguldFAI5LYifE";
+const char* telegramChatID = "6051485053";  // You can get this ID by starting a chat with your bot and checking the updates.
+
+WiFiClientSecure client;
+
+void setup() {
+  Serial.begin(115200);
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print("Connecting.");
+  }
+  Serial.println();
+  Serial.print("Connected to WiFi, IP address: ");
+  Serial.println(WiFi.localIP());
+
+  Firebase.begin(firebaseHost, firebaseAuth);
+  Firebase.reconnectWiFi(true);
+  Firebase.setReadTimeout(firebaseData, 1000);
+  Firebase.setwriteSizeLimit(firebaseData, "tiny");
+
+  servoMotor1.attach(D1);
+  servoMotor1.write(90);
+
+  servoMotor2.attach(D2);
+  servoMotor2.write(90);
+
+  pinMode(buzzerPin, OUTPUT);
+  mySerial.begin(9600);
+  if (myDFPlayer.begin(mySerial)) {
+    myDFPlayer.volume(20);
+  }
+}
+
+void controlServo(Servo& servo, int degrees) {
+  servo.write(degrees);
+  delay(200);
+}
+
+void sendTelegramMessage(const char* message) {
+  String url = "https://api.telegram.org/bot" + String(telegramBotToken) + "/sendMessage";
+  String postData = "chat_id=" + String(telegramChatID) + "&text=" + message;
+
+  client.connect("api.telegram.org", 443);
+
+  if (client.connected()) {
+    client.println("POST " + url + " HTTP/1.1");
+    client.println("Host: api.telegram.org");
+    client.println("Connection: close");
+    client.println("Content-Type: application/x-www-form-urlencoded");
+    client.print("Content-Length: ");
+    client.println(postData.length());
+    client.println();
+    client.println(postData);
+  }
+
+  while (client.connected()) {
+    String line = client.readStringUntil('\n');
+    if (line == "\r") {
+      break;
+    }
+  }
+
+  client.stop();
+}
+
+void loop() {
+  if (Firebase.getInt(firebaseData, "/orders/items/i1")) {
+    int itemValue = firebaseData.intData();
+    Serial.print("Item i1: ");
+    Serial.println(itemValue);
+
+    // Rotate the servo motors consecutively with a delay
+    for (int i = 0; i < itemValue; i++) {
+      controlServo(servoMotor1, 0);
+      controlServo(servoMotor1, 90);
+
+      controlServo(servoMotor2, 0);
+      controlServo(servoMotor2, 90);
+
+      // Decrement the value in the database
+      Firebase.setInt(firebaseData, "/orders/items/i1", itemValue - i - 1);
+    }
+
+    // Notify when dispensing is completed
+    sendTelegramMessage("Dispensing completed!");
+  }
+
+  delay(10000); // Adjust the delay based on your needs
+}
